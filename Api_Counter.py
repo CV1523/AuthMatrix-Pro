@@ -32,6 +32,9 @@ from javax.swing import SwingUtilities
 from java.lang import Runnable
 from javax.swing import JProgressBar
 from javax.swing.event import DocumentListener
+from javax.swing import JTable
+from javax.swing.table import DefaultTableModel, DefaultTableCellRenderer
+from java.lang import Object
 
 # -------- Mouse listener (Jython-safe) --------
 class GitHubClickListener(MouseAdapter):
@@ -54,6 +57,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         self.current_message = None
         self.unauth_requests = {}
         self.unauth_responses = {}
+        self.unauth_status_codes = {}
         self.is_scanning = False
 
         callbacks.setExtensionName("Unique API Counter")
@@ -67,7 +71,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         # Filter state
         self.exclude_options = False
         self.discovered_methods = set(["All"])
-
 
         self._build_ui()
         self._load_from_sitemapping()
@@ -115,20 +118,23 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         self._update_method_dropdown()
 
     # ---------------- UI ---------------- #
+
     def _build_ui(self):
         self.panel = JPanel(BorderLayout())
 
         # ---------- Top bar (Command Center) ----------
         top_panel = JPanel(BorderLayout())
-
         self.count_label = JLabel("Total Unique APIs: 0")
         self.count_label.setFont(Font("SansSerif", Font.BOLD, 13))
 
         left_top = JPanel(FlowLayout(FlowLayout.LEFT))
         left_top.add(self.count_label)
+        
         right_top = JPanel(FlowLayout(FlowLayout.RIGHT))
+        
+        # Search Field
         self.search_field = JTextField(15)
-        self.search_field.setToolTipText("Search by path or keyword...")
+        from javax.swing.event import DocumentListener
         class SearchListener(DocumentListener):
             def __init__(self, extender): self.ext = extender
             def insertUpdate(self, e): self.ext.refresh_display(None)
@@ -136,25 +142,19 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
             def changedUpdate(self, e): self.ext.refresh_display(None)
         self.search_field.getDocument().addDocumentListener(SearchListener(self))
 
-        # 3. Add to right_top panel
         right_top.add(JLabel("Search:"))
         right_top.add(self.search_field)
         right_top.add(JLabel("  |  "))
 
-        # Container for Buttons + Filter
-        # right_top = JPanel(FlowLayout(FlowLayout.RIGHT))
-
-        # 1. Initialize the buttons previously at the bottom
+        # Action Buttons
         self.refresh_button = JButton("Refresh Count", actionPerformed=self.refresh_display)
         self.clear_button = JButton("Clear APIs", actionPerformed=self.clear_apis)
         self.export_button = JButton("Export CSV", actionPerformed=self.export_csv)
-
-        # 2. Add buttons to the top right
         right_top.add(self.refresh_button)
         right_top.add(self.clear_button)
         right_top.add(self.export_button)
 
-        # 3. Add a separator and Method Filter
+        # Method Filter
         right_top.add(JLabel(" |  Filter Method:"))
         self.method_filter_dropdown = JComboBox(["All"])
         self.method_filter_dropdown.addActionListener(self._on_filter_change)
@@ -163,15 +163,34 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         top_panel.add(left_top, BorderLayout.WEST)
         top_panel.add(right_top, BorderLayout.EAST)
 
-        # ---------- Center (API List & Viewers) ----------
-        self.api_list_model = []
-        self.api_list = JList()
-        self.api_list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
-        self.api_list.addListSelectionListener(self.on_api_selected)
-        self.api_list.setCellRenderer(ApiListRenderer(self))
+        # ---------- Center (API TABLE & Viewers) ----------
+        from javax.swing.table import DefaultTableModel
+        from javax.swing import JTable
 
-        api_scroll = JScrollPane(self.api_list)
+        # Initialize Table Model
+        self.api_table_model = DefaultTableModel(["S.NO", "Types", "API", "Status Code"], 0)
+        self.api_table = JTable(self.api_table_model)
+        self.api_table.setAutoCreateRowSorter(True)
+        self.api_table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
+        
+        # Set column widths
+        self.api_table.getColumnModel().getColumn(0).setPreferredWidth(50)
+        self.api_table.getColumnModel().getColumn(1).setPreferredWidth(70)
+        self.api_table.getColumnModel().getColumn(2).setPreferredWidth(400)
+        self.api_table.getColumnModel().getColumn(3).setPreferredWidth(100)
+        
+        # Table selection listener
+        def tableSelectionChanged(event):
+            if not event.getValueIsAdjusting():
+                self.on_api_selected(None)
+        self.api_table.getSelectionModel().addListSelectionListener(tableSelectionChanged)
+        
+        # Custom Renderer for Red Highlighting
+        self.api_table.setDefaultRenderer(Object, ApiTableRenderer(self))
 
+        api_scroll = JScrollPane(self.api_table)
+
+        # Viewers
         self.auth_request_viewer = self.callbacks.createMessageEditor(self, False)
         self.unauth_request_viewer = self.callbacks.createMessageEditor(self, False)
 
@@ -183,7 +202,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         class TabChangeListener(ChangeListener):
             def __init__(self, extender): self.extender = extender
             def stateChanged(self, event): self.extender.on_api_selected(None)
-
         self.request_tabs.addChangeListener(TabChangeListener(self))
 
         self.response_viewer = self.callbacks.createMessageEditor(self, False)
@@ -199,51 +217,44 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         right_split.setResizeWeight(0.5)
 
         main_split = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, api_scroll, right_split)
-        main_split.setResizeWeight(0.3)
+        main_split.setResizeWeight(0.4)
 
-        # ---------- Bottom bar (Verification & Progress) ----------
+        # ---------- Bottom bar ----------
         bottom_panel = JPanel(BorderLayout())
-
-        # Left side: Auth configuration
         auth_panel = JPanel(FlowLayout(FlowLayout.LEFT))
         
         self.auth_header_input = JTextField(25)
-        self.auth_header_input.setToolTipText("Headers to remove (comma separated)")
-
         self.verify_button = JButton("Verify Unauthenticated APIs", actionPerformed=self.verify_unauthenticated)
 
-        # Progress bar setup
         from java.awt import Dimension
         self.progress_bar = JProgressBar(0, 100)
         self.progress_bar.setStringPainted(True)
         self.progress_bar.setVisible(False)
-        self.progress_bar.setPreferredSize(Dimension(150, 10))
+        self.progress_bar.setPreferredSize(Dimension(150, 15))
+
+        self.stop_button = JButton("Stop Scan", actionPerformed=self.request_stop)
+        self.stop_button.setVisible(False)
+        self.stop_button.setForeground(Color(200, 0, 0))
 
         auth_panel.add(JLabel("Auth Headers:"))
         auth_panel.add(self.auth_header_input)
         auth_panel.add(self.verify_button)
+        auth_panel.add(self.stop_button)
         auth_panel.add(self.progress_bar)
 
-        # Right side: Credits
+        credits_panel = JPanel(FlowLayout(FlowLayout.RIGHT))
         credits_label = JLabel("Built by HK@WhizzC  | GitHub")
         credits_label.setFont(Font("SansSerif", Font.PLAIN, 11))
         credits_label.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR))
         credits_label.addMouseListener(GitHubClickListener())
-
-        credits_panel = JPanel(FlowLayout(FlowLayout.RIGHT))
         credits_panel.add(credits_label)
 
         bottom_panel.add(auth_panel, BorderLayout.WEST)
         bottom_panel.add(credits_panel, BorderLayout.EAST)
 
-        # ---------- Master Layout Assembly ----------
         self.panel.add(top_panel, BorderLayout.NORTH)
         self.panel.add(main_split, BorderLayout.CENTER)
         self.panel.add(bottom_panel, BorderLayout.SOUTH)
-        self.stop_button = JButton("Stop Scan", actionPerformed=self.request_stop)
-        self.stop_button.setVisible(False)
-        # self.stop_button.setForeground(Color.White)
-        auth_panel.add(self.stop_button)
 
     # ---------------- HTTP Listener ---------------- #
 
@@ -343,42 +354,173 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
             
             SwingUtilities.invokeLater(UpdateText(self.auth_header_input, new_suggestions, existing_filters))
 
+    # def on_api_selected(self, event):
+    #     if event.getValueIsAdjusting():
+    #         return
+
+    #     selected = self.api_list.getSelectedValue()
+    #     if not selected:
+    #         return
+
+    #     data = self.api_requests.get(selected)
+    #     if not data:
+    #         return
+
+    #     self.current_message = data
+
+    #     self.auth_request_viewer.setMessage(
+    #         data["request"], True
+    #     )
+
+    #     unauth_req = self.unauth_requests.get(selected)
+    #     if unauth_req:
+    #         self.unauth_request_viewer.setMessage(unauth_req, True)
+    #     else:
+    #         self.unauth_request_viewer.setMessage(None, False)
+
+    #     if self.request_tabs.getSelectedIndex() == 1:
+    #         unauth_resp = self.unauth_responses.get(selected)
+    #         if unauth_resp:
+    #             self.response_viewer.setMessage(unauth_resp, False)
+    #         else:
+    #             self.response_viewer.setMessage(None, False)
+    #     else:
+    #         # Show original authenticated response
+    #         if data["response"]:
+    #             self.response_viewer.setMessage(data["response"], False)
+    #         else:
+    #             self.response_viewer.setMessage(None, False)
+
+    # def on_api_selected(self, event):
+    #     # 1. Get the selected row index from the table
+    #     row = self.api_table.getSelectedRow()
+        
+    #     # If no row is selected, clear viewers and exit
+    #     if row == -1:
+    #         self.auth_request_viewer.setMessage(None, False)
+    #         self.unauth_request_viewer.setMessage(None, False)
+    #         self.response_viewer.setMessage(None, False)
+    #         return
+
+    #     # 2. Reconstruct the API signature from Table Columns
+    #     # Col 1 is 'Types' (Method), Col 2 is 'API' (Path)
+    #     try:
+    #         method = self.api_table.getValueAt(row, 1)
+    #         path = self.api_table.getValueAt(row, 2)
+    #         selected_sig = "{} {}".format(method, path)
+            
+    #         data = self.api_requests.get(selected_sig)
+    #     except Exception as e:
+    #         self.callbacks.printError("Selection Error: " + str(e))
+    #         return
+
+    #     if not data:
+    #         return
+
+    #     self.current_message = data
+
+    #     # 3. Handle Request/Response Logic based on Tab Selection
+    #     # Index 0 = 'Request', Index 1 = 'Unauth Request'
+    #     current_tab = self.request_tabs.getSelectedIndex()
+
+    #     if current_tab == 1:
+    #         # Show Unauth Data
+    #         unauth_req = self.unauth_requests.get(selected_sig)
+    #         self.unauth_request_viewer.setMessage(unauth_req if unauth_req else b"", True)
+            
+    #         unauth_resp = self.unauth_responses.get(selected_sig)
+    #         self.response_viewer.setMessage(unauth_resp if unauth_resp else b"", False)
+    #     else:
+    #         # Show Original Authenticated Data
+    #         self.auth_request_viewer.setMessage(data["request"], True)
+    #         self.response_viewer.setMessage(data["response"] if data["response"] else b"", False)
+
+    # def on_api_selected(self, event):
+    #     # 1. Get the visual row index
+    #     view_row = self.api_table.getSelectedRow()
+        
+    #     if view_row == -1:
+    #         self.auth_request_viewer.setMessage(None, False)
+    #         self.unauth_request_viewer.setMessage(None, False)
+    #         self.response_viewer.setMessage(None, False)
+    #         return
+
+    #     # 2. Convert View Index to Model Index (CRITICAL for Sorting)
+    #     try:
+    #         model_row = self.api_table.convertRowIndexToModel(view_row)
+            
+    #         # Use the model to get the values to ensure accuracy
+    #         method = self.api_table.getModel().getValueAt(model_row, 1)
+    #         path = self.api_table.getModel().getValueAt(model_row, 2)
+    #         selected_sig = "{} {}".format(method, path)
+            
+    #         data = self.api_requests.get(selected_sig)
+    #     except Exception as e:
+    #         self.callbacks.printError("Selection Mapping Error: " + str(e))
+    #         return
+
+    #     if not data:
+    #         return
+
+    #     self.current_message = data
+
+    #     # 3. Handle Request/Response Logic
+    #     current_tab = self.request_tabs.getSelectedIndex()
+
+    #     if current_tab == 1:
+    #         # Show Unauth Data
+    #         unauth_req = self.unauth_requests.get(selected_sig)
+    #         self.unauth_request_viewer.setMessage(unauth_req if unauth_req else b"", True)
+            
+    #         unauth_resp = self.unauth_responses.get(selected_sig)
+    #         self.response_viewer.setMessage(unauth_resp if unauth_resp else b"", False)
+    #     else:
+    #         # Show Original Authenticated Data
+    #         self.auth_request_viewer.setMessage(data["request"], True)
+    #         self.response_viewer.setMessage(data["response"] if data["response"] else b"", False)
+
     def on_api_selected(self, event):
-        if event.getValueIsAdjusting():
+        # 1. Get the visual row index
+        view_row = self.api_table.getSelectedRow()
+        
+        if view_row == -1:
+            self.auth_request_viewer.setMessage(None, False)
+            self.unauth_request_viewer.setMessage(None, False)
+            self.response_viewer.setMessage(None, False)
             return
 
-        selected = self.api_list.getSelectedValue()
-        if not selected:
+        # 2. Convert View Index to Model Index (Essential for Sorting/Searching)
+        try:
+            model_row = self.api_table.convertRowIndexToModel(view_row)
+            method = self.api_table.getModel().getValueAt(model_row, 1)
+            path = self.api_table.getModel().getValueAt(model_row, 2)
+            selected_sig = "{} {}".format(method, path)
+            
+            data = self.api_requests.get(selected_sig)
+        except:
             return
 
-        data = self.api_requests.get(selected)
         if not data:
             return
 
         self.current_message = data
 
-        self.auth_request_viewer.setMessage(
-            data["request"], True
-        )
+        # 3. Determine which data to show based on the active tab
+        # Index 0 = "Request" | Index 1 = "Unauth Request"
+        current_tab = self.request_tabs.getSelectedIndex()
 
-        unauth_req = self.unauth_requests.get(selected)
-        if unauth_req:
-            self.unauth_request_viewer.setMessage(unauth_req, True)
+        if current_tab == 1:
+            # Show the Unauth Request and its specific Response
+            unauth_req = self.unauth_requests.get(selected_sig)
+            self.unauth_request_viewer.setMessage(unauth_req if unauth_req else b"", True)
+            
+            # This pulls the response captured during the 'Verify' scan
+            unauth_resp = self.unauth_responses.get(selected_sig)
+            self.response_viewer.setMessage(unauth_resp if unauth_resp else b"", False)
         else:
-            self.unauth_request_viewer.setMessage(None, False)
-
-        if self.request_tabs.getSelectedIndex() == 1:
-            unauth_resp = self.unauth_responses.get(selected)
-            if unauth_resp:
-                self.response_viewer.setMessage(unauth_resp, False)
-            else:
-                self.response_viewer.setMessage(None, False)
-        else:
-            # Show original authenticated response
-            if data["response"]:
-                self.response_viewer.setMessage(data["response"], False)
-            else:
-                self.response_viewer.setMessage(None, False)
+            # Show the Original Auth Request and the Original Response
+            self.auth_request_viewer.setMessage(data["request"], True)
+            self.response_viewer.setMessage(data["response"] if data["response"] else b"", False)
 
     def _update_method_dropdown(self):
         """Refreshes the dropdown list without losing the current selection."""
@@ -424,12 +566,22 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         return filtered
     # ---------------- Actions ---------------- #
     def refresh_display(self, event):
-        apis = sorted(self._get_filtered_apis())
-        self.api_list_model = apis
-        self.api_list.setListData(apis)
-        self.count_label.setText(
-            "Total Unique APIs: {}".format(len(apis))
-        )
+        self.api_table_model.setRowCount(0) # Clear table
+        filtered_apis = sorted(self._get_filtered_apis())
+        
+        for i, api_sig in enumerate(filtered_apis):
+            method, path = api_sig.split(" ", 1)
+            # Retrieve status code if it exists from the unauth check
+            status = self.unauth_status_codes.get(api_sig, "-")
+            
+            self.api_table_model.addRow([
+                i + 1,          # S.NO
+                method,         # Types
+                path,           # API
+                status          # Status Code
+            ])
+        
+        self.count_label.setText("Total Unique APIs: {}".format(len(filtered_apis)))
 
     def clear_apis(self, event):
         self.all_apis.clear()
@@ -482,7 +634,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         raw_headers = self.auth_header_input.getText().strip()
         scan_items = list(self.api_requests.items())
         total_tasks = len(scan_items)
-        
+        batch_size = 5
         if total_tasks == 0:
             self.is_scanning = False
             return
@@ -538,16 +690,22 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
 
                 if response:
                     self.unauth_responses[api] = response
-                    if self.helpers.analyzeResponse(response).getStatusCode() < 400:
+                    resp_info = self.helpers.analyzeResponse(response)
+                    code = resp_info.getStatusCode()
+                    self.unauth_status_codes[api] = code # Save the code here
+                    if code < 400:
                         temp_unauth.add(api)
 
                 current_count += 1
                 val = current_count 
                 SwingUtilities.invokeLater(PythonRunnable(lambda: self.progress_bar.setValue(val)))
 
-                if current_count % 5 == 0:
+                if current_count % batch_size == 0 or current_count == total_tasks:
                     self.unauth_apis = frozenset(temp_unauth)
-                    self.api_list.repaint()
+                    
+                    # CHANGE THIS LINE: from api_list to api_table
+                    self.api_table.repaint() 
+                    
                     time.sleep(0.01)
 
             except Exception as e:
@@ -609,27 +767,37 @@ class UnauthWorker(Runnable):
     def run(self):
         self.extender._run_unauth_checks()
 
-class ApiListRenderer(DefaultListCellRenderer):
+class ApiTableRenderer(DefaultTableCellRenderer):
     def __init__(self, extender):
         self.extender = extender
-        self.dark_row = Color(60, 63, 65)
-        self.light_row = Color(69, 73, 74)
-        self.unauth_row = Color(140, 60, 60)
-        self.selected_row = Color(75, 110, 175)
+        self.unauth_row = Color(140, 60, 60)   # Red
+        self.selected_row = Color(75, 110, 175) # Blue
+        self.even_row = Color(43, 43, 43)       # Dark Zebra
+        self.odd_row = Color(52, 52, 52)        # Light Zebra
 
-    def getListCellRendererComponent(self, list, value, index, isSelected, cellHasFocus):
-        # Call super first for basic setup
-        c = DefaultListCellRenderer.getListCellRendererComponent(
-            self, list, value, index, isSelected, cellHasFocus
+    def getTableCellRendererComponent(self, table, value, isSelected, hasFocus, row, column):
+        c = DefaultTableCellRenderer.getTableCellRendererComponent(
+            self, table, value, isSelected, hasFocus, row, column
         )
+        
+        # Mapping view row to model row so the color stays with the correct API
+        try:
+            model_row = table.convertRowIndexToModel(row)
+            method = table.getModel().getValueAt(model_row, 1)
+            path = table.getModel().getValueAt(model_row, 2)
+            api_sig = "{} {}".format(method, path)
+        except:
+            api_sig = ""
 
+        # Background Logic
         if isSelected:
             c.setBackground(self.selected_row)
-        # Faster lookup: Ensure self.extender.unauth_apis is always a set or frozenset
-        elif value in self.extender.unauth_apis:
+        elif api_sig in self.extender.unauth_apis:
             c.setBackground(self.unauth_row)
         else:
-            c.setBackground(self.dark_row if index % 2 == 0 else self.light_row)
+            # Apply Zebra Stripes based on the visual row index
+            c.setBackground(self.even_row if row % 2 == 0 else self.odd_row)
 
         c.setForeground(Color.WHITE)
+        self.setBorder(None)
         return c
