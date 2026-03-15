@@ -27,6 +27,9 @@ from java.awt import Color
 from burp import IMessageEditorController
 from javax.swing import JTabbedPane
 from javax.swing import DefaultComboBoxModel
+import time
+from javax.swing import SwingUtilities
+from java.lang import Runnable
 
 # -------- Mouse listener (Jython-safe) --------
 class GitHubClickListener(MouseAdapter):
@@ -233,11 +236,12 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         path = url.getPath()
         
         api_signature = method + " " + path
+        self._detect_auth_headers(request_info.getHeaders())
 
         # 4. FAST EXIT: If we already have this API, stop immediately
         if api_signature in self.all_apis:
             return
-
+        
         # 5. Scope-based filtering
         if not self.callbacks.isInScope(url):
             return
@@ -266,6 +270,45 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
             "response": messageInfo.getResponse(),
             "method": method # Store method separately for easier filtering
         }
+
+    def _detect_auth_headers(self, headers):
+        """Identifies potential auth headers and suggests them in the UI."""
+        # Common authentication/session header keywords
+        auth_keywords = [
+            "authorization", "bearer", "token", "jwt", "session", 
+            "cookie", "api-key", "x-auth", "auth", "authorizationtoken"
+        ]
+        
+        current_text = self.auth_header_input.getText().strip().lower()
+        existing_filters = [h.strip() for h in current_text.split(",") if h.strip()]
+        
+        new_suggestions = []
+        
+        for header in headers:
+            # Burp headers are "Header-Name: value" strings
+            if ":" not in header: continue
+            
+            header_name = header.split(":", 1)[0].strip()
+            header_name_lower = header_name.lower()
+            
+            # Check if header name contains any of our keywords
+            if any(keyword in header_name_lower for keyword in auth_keywords):
+                if header_name_lower not in existing_filters and header_name_lower not in new_suggestions:
+                    new_suggestions.append(header_name)
+
+        if new_suggestions:
+            # Update the text field on the UI thread
+            
+            class UpdateText(Runnable):
+                def __init__(self, field, suggestions, existing):
+                    self.field = field
+                    self.suggestions = suggestions
+                    self.existing = existing
+                def run(self):
+                    combined = self.existing + self.suggestions
+                    self.field.setText(", ".join(combined))
+            
+            SwingUtilities.invokeLater(UpdateText(self.auth_header_input, new_suggestions, existing_filters))
 
     def on_api_selected(self, event):
         if event.getValueIsAdjusting():
@@ -376,9 +419,9 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         Thread(UnauthWorker(self)).start()
 
     def _run_unauth_checks(self):
-        import time
-        from javax.swing import SwingUtilities
-        from java.lang import Runnable
+        
+        
+        
 
         self.callbacks.printOutput("[*] Starting Unauth Scan...")
         
