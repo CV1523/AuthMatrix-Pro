@@ -65,10 +65,51 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         self.exclude_options = False
         self.discovered_methods = set(["All"])
 
-        callbacks.registerHttpListener(self)
 
         self._build_ui()
+        self._load_from_sitemapping()
+        callbacks.registerHttpListener(self)
+
+        self.refresh_display(None)
+
+        # self._build_ui()
         callbacks.addSuiteTab(self)
+
+    def _load_from_sitemapping(self):
+        """Scans Burp's native Site Map to recover APIs stored in the project file."""
+        # Passing None to getSiteMap returns the entire project site map
+        site_map = self.callbacks.getSiteMap(None)
+        
+        self.callbacks.printOutput("[*] Syncing with native project logs...")
+        
+        for item in site_map:
+            # Re-use the same logic as processHttpMessage
+            request_info = self.helpers.analyzeRequest(item)
+            url = request_info.getUrl()
+            
+            # Only sync items in scope to keep the tool clean
+            if self.callbacks.isInScope(url):
+                method = request_info.getMethod()
+                path = url.getPath()
+                
+                # Filter out static noise (JS, CSS, etc.)
+                ignore_ext = (".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg")
+                if path.lower().endswith(ignore_ext):
+                    continue
+
+                api_signature = method + " " + path
+                
+                if api_signature not in self.all_apis:
+                    self.all_apis.add(api_signature)
+                    self.discovered_methods.add(method)
+                    self.api_requests[api_signature] = {
+                        "service": item.getHttpService(),
+                        "request": item.getRequest(),
+                        "response": item.getResponse(),
+                        "method": method
+                    }
+        
+        self._update_method_dropdown()
 
     # ---------------- UI ---------------- #
     def _build_ui(self):
