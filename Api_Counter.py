@@ -584,10 +584,25 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         self.count_label.setText("Total Unique APIs: {}".format(len(filtered_apis)))
 
     def clear_apis(self, event):
-        self.all_apis.clear()
+        # 1. Clear the underlying data dictionaries
         self.api_requests.clear()
-        self.api_list.setListData([])
+        self.all_apis.clear()
+        self.unauth_apis = set()
+        self.unauth_requests.clear()
+        self.unauth_responses.clear()
+        self.unauth_status_codes.clear()
+        
+        # 2. Reset the Table Model (This replaces setListData)
+        self.api_table_model.setRowCount(0)
+        
+        # 3. Clear the viewers
+        self.auth_request_viewer.setMessage(None, False)
+        self.unauth_request_viewer.setMessage(None, False)
+        self.response_viewer.setMessage(None, False)
+        
+        # 4. Update the UI labels
         self.count_label.setText("Total Unique APIs: 0")
+        self.callbacks.printOutput("[*] API list cleared.")
 
     def _on_options_change(self, event):
         self.exclude_options = (
