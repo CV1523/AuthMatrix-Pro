@@ -31,6 +31,7 @@ import time
 from javax.swing import SwingUtilities
 from java.lang import Runnable
 from javax.swing import JProgressBar
+from javax.swing.event import DocumentListener
 
 # -------- Mouse listener (Jython-safe) --------
 class GitHubClickListener(MouseAdapter):
@@ -125,9 +126,23 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
 
         left_top = JPanel(FlowLayout(FlowLayout.LEFT))
         left_top.add(self.count_label)
+        right_top = JPanel(FlowLayout(FlowLayout.RIGHT))
+        self.search_field = JTextField(15)
+        self.search_field.setToolTipText("Search by path or keyword...")
+        class SearchListener(DocumentListener):
+            def __init__(self, extender): self.ext = extender
+            def insertUpdate(self, e): self.ext.refresh_display(None)
+            def removeUpdate(self, e): self.ext.refresh_display(None)
+            def changedUpdate(self, e): self.ext.refresh_display(None)
+        self.search_field.getDocument().addDocumentListener(SearchListener(self))
+
+        # 3. Add to right_top panel
+        right_top.add(JLabel("Search:"))
+        right_top.add(self.search_field)
+        right_top.add(JLabel("  |  "))
 
         # Container for Buttons + Filter
-        right_top = JPanel(FlowLayout(FlowLayout.RIGHT))
+        # right_top = JPanel(FlowLayout(FlowLayout.RIGHT))
 
         # 1. Initialize the buttons previously at the bottom
         self.refresh_button = JButton("Refresh Count", actionPerformed=self.refresh_display)
@@ -382,15 +397,31 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         self.refresh_display(None)
 
     # ---------------- Filtering ---------------- #
-    def _get_filtered_apis(self):
-        selected_method = self.method_filter_dropdown.getSelectedItem()
-        if not selected_method or selected_method == "All":
-            return self.all_apis
+    # def _get_filtered_apis(self):
+    #     selected_method = self.method_filter_dropdown.getSelectedItem()
+    #     if not selected_method or selected_method == "All":
+    #         return self.all_apis
         
-        # Filter set based on the prefix of the API signature (e.g., "GET ")
-        prefix = selected_method + " "
-        return {api for api in self.all_apis if api.startswith(prefix)}
-
+    #     # Filter set based on the prefix of the API signature (e.g., "GET ")
+    #     prefix = selected_method + " "
+    #     return {api for api in self.all_apis if api.startswith(prefix)}
+    def _get_filtered_apis(self):
+        """Combines Method Filter and Search Keyword."""
+        selected_method = self.method_filter_dropdown.getSelectedItem()
+        search_query = self.search_field.getText().strip().lower()
+        
+        filtered = self.all_apis
+        
+        # Apply Method Filter
+        if selected_method and selected_method != "All":
+            prefix = selected_method + " "
+            filtered = {api for api in filtered if api.startswith(prefix)}
+            
+        # Apply Search Keyword Filter
+        if search_query:
+            filtered = {api for api in filtered if search_query in api.lower()}
+            
+        return filtered
     # ---------------- Actions ---------------- #
     def refresh_display(self, event):
         apis = sorted(self._get_filtered_apis())
