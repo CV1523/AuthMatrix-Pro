@@ -53,6 +53,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         self.current_message = None
         self.unauth_requests = {}
         self.unauth_responses = {}
+        self.is_scanning = False
 
         callbacks.setExtensionName("Unique API Counter")
 
@@ -113,155 +114,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         self._update_method_dropdown()
 
     # ---------------- UI ---------------- #
-    # def _build_ui(self):
-    #     self.panel = JPanel(BorderLayout())
-
-    #     # ---------- Top bar ----------
-    #     top_panel = JPanel(BorderLayout())
-
-    #     self.count_label = JLabel("Total Unique APIs: 0")
-    #     self.count_label.setFont(Font("SansSerif", Font.BOLD, 13))
-
-    #     left_top = JPanel(FlowLayout(FlowLayout.LEFT))
-    #     left_top.add(self.count_label)
-
-    #     right_top = JPanel(FlowLayout(FlowLayout.RIGHT))
-    #     self.method_filter_dropdown = JComboBox(["All"])
-    #     self.method_filter_dropdown.addActionListener(self._on_filter_change)
-
-    #     right_top.add(JLabel("Filter Method:"))
-    #     right_top.add(self.method_filter_dropdown)
-
-    #     top_panel.add(left_top, BorderLayout.WEST)
-    #     top_panel.add(right_top, BorderLayout.EAST)
-
-    #     # ---------- Center ----------
-    #     self.api_list_model = []
-    #     self.api_list = JList()
-        
-    #     self.api_list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
-    #     self.api_list.addListSelectionListener(self.on_api_selected)
-        
-    #     self.api_list.setCellRenderer(ApiListRenderer(self))
-
-    #     api_scroll = JScrollPane(self.api_list)
-
-    #     # ---- Request viewers (Auth + Unauth) ----
-    #     self.auth_request_viewer = self.callbacks.createMessageEditor(self, False)
-    #     self.unauth_request_viewer = self.callbacks.createMessageEditor(self, False)
-
-    #     self.request_tabs = JTabbedPane()
-    #     self.request_tabs.addTab(
-    #         "Request",
-    #         self.auth_request_viewer.getComponent()
-    #     )
-    #     self.request_tabs.addTab(
-    #         "Unauth Request",
-    #         self.unauth_request_viewer.getComponent()
-    #     )
-
-    #     from javax.swing.event import ChangeListener
-    #     class TabChangeListener(ChangeListener):
-    #         def __init__(self, extender):
-    #             self.extender = extender
-    #         def stateChanged(self, event):
-    #             self.extender.on_api_selected(None)
-
-    #     self.request_tabs.addChangeListener(TabChangeListener(self))
-
-    #     self.response_viewer = self.callbacks.createMessageEditor(self, False)
-
-
-    #     request_panel = JPanel(BorderLayout())
-    #     # request_panel.add(JLabel("Request"), BorderLayout.NORTH)
-    #     request_panel.add(self.request_tabs, BorderLayout.CENTER)
-
-    #     response_panel = JPanel(BorderLayout())
-    #     response_panel.add(JLabel("Response"), BorderLayout.NORTH)
-    #     response_panel.add(self.response_viewer.getComponent(), BorderLayout.CENTER)
-
-    #     right_split = JSplitPane(
-    #         JSplitPane.VERTICAL_SPLIT,
-    #         request_panel,
-    #         response_panel
-    #     )
-    #     right_split.setResizeWeight(0.5)
-
-    #     # Main split (LEFT = API list, RIGHT = Request/Response)
-    #     main_split = JSplitPane(
-    #         JSplitPane.HORIZONTAL_SPLIT,
-    #         api_scroll,
-    #         right_split
-    #     )
-    #     main_split.setResizeWeight(0.3)
-
-    #     # ---------- Bottom bar ----------
-    #     bottom_panel = JPanel(BorderLayout())
-
-    #     # Buttons (left)
-    #     button_panel = JPanel(FlowLayout(FlowLayout.LEFT))
-
-    #     self.refresh_button = JButton(
-    #         "Refresh Count",
-    #         actionPerformed=self.refresh_display
-    #     )
-    #     self.clear_button = JButton(
-    #         "Clear APIs",
-    #         actionPerformed=self.clear_apis
-    #     )
-    #     self.export_button = JButton(
-    #         "Export CSV",
-    #         actionPerformed=self.export_csv
-    #     )
-
-    #     button_panel.add(self.refresh_button)
-    #     button_panel.add(self.clear_button)
-    #     button_panel.add(self.export_button)
-
-    #     # ---- Auth header input ----
-    #     self.auth_header_input = JTextField(25)
-    #     self.auth_header_input.setToolTipText(
-    #         "Headers to remove for unauth check (comma separated)"
-    #     )
-
-    #     self.verify_button = JButton(
-    #         "Verify Unauthenticated APIs",
-    #         actionPerformed=self.verify_unauthenticated
-    #     )
-
-    #     button_panel.add(JLabel("Auth Headers:"))
-    #     button_panel.add(self.auth_header_input)
-    #     button_panel.add(self.verify_button)
-
-    #     # Credits (right, clickable)
-    #     credits_label = JLabel("Built by HK@WhizzC  | GitHub")
-    #     credits_label.setFont(Font("SansSerif", Font.PLAIN, 11))
-    #     credits_label.setCursor(
-    #         Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-    #     )
-    #     credits_label.setToolTipText("Open GitHub repository")
-
-    #     credits_label.addMouseListener(GitHubClickListener())
-
-    #     credits_panel = JPanel(FlowLayout(FlowLayout.RIGHT))
-    #     credits_panel.add(credits_label)
-
-    #     bottom_panel.add(button_panel, BorderLayout.WEST)
-    #     bottom_panel.add(credits_panel, BorderLayout.EAST)
-
-    #     # ---------- Layout ----------
-    #     self.panel.add(top_panel, BorderLayout.NORTH)
-    #     self.panel.add(main_split, BorderLayout.CENTER)
-    #     self.panel.add(bottom_panel, BorderLayout.SOUTH)
-
-    #     self.progress_bar = JProgressBar(0, 100)
-    #     self.progress_bar.setStringPainted(True) # Shows the % text
-    #     self.progress_bar.setVisible(False)      # Hidden until needed
-    #     from java.awt import Dimension
-    #     self.progress_bar.setPreferredSize(Dimension(150, 20))
-
-    #     button_panel.add(self.progress_bar)
-
     def _build_ui(self):
         self.panel = JPanel(BorderLayout())
 
@@ -373,6 +225,10 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         self.panel.add(top_panel, BorderLayout.NORTH)
         self.panel.add(main_split, BorderLayout.CENTER)
         self.panel.add(bottom_panel, BorderLayout.SOUTH)
+        self.stop_button = JButton("Stop Scan", actionPerformed=self.request_stop)
+        self.stop_button.setVisible(False)
+        # self.stop_button.setForeground(Color.White)
+        auth_panel.add(self.stop_button)
 
     # ---------------- HTTP Listener ---------------- #
 
@@ -580,208 +436,68 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
     def verify_unauthenticated(self, event):
         Thread(UnauthWorker(self)).start()
 
-    # def _run_unauth_checks(self):
-        
-    #     self.callbacks.printOutput("[*] Starting Unauth Scan...")
-        
-    #     raw_headers = self.auth_header_input.getText().strip()
-
-    #     scan_items = list(self.api_requests.items())
-    #     total_tasks = len(scan_items)
-        
-    #     if total_tasks == 0:
-    #         return
-
-    #     # Initialize Progress Bar
-    #     SwingUtilities.invokeLater(Runnable(lambda: self.progress_bar.setVisible(True)))
-    #     SwingUtilities.invokeLater(Runnable(lambda: self.progress_bar.setMaximum(total_tasks)))
-        
-    #     if not raw_headers:
-    #         self.callbacks.printOutput("[-] No auth headers provided")
-    #         return
-
-    #     auth_headers = [h.strip().lower() for h in raw_headers.split(",")]
-        
-    #     # Snapshot current APIs to avoid thread-safety issues during iteration
-    #     scan_items = list(self.api_requests.items())
-    #     temp_unauth = set()
-        
-    #     current_count = 0
-    #     batch_size = 10 # UI updates every 10 requests to reduce lag
-
-    #     for api, data in scan_items:
-    #         try:
-    #             http_service = data["service"]
-    #             request = data["request"]
-    #             req_info = self.helpers.analyzeRequest(http_service, request)
-
-    #             headers = list(req_info.getHeaders())
-    #             body = request[req_info.getBodyOffset():]
-
-    #             # Remove auth headers
-    #             new_headers = [h for h in headers if h.split(":", 1)[0].lower() not in auth_headers]
-    #             new_request = self.helpers.buildHttpMessage(new_headers, body)
-    #             self.unauth_requests[api] = new_request
-
-    #             # Execute Request synchronously in this background thread
-    #             rr = self.callbacks.makeHttpRequest(http_service, new_request)
-    #             response = rr.getResponse()
-
-    #             if response:
-    #                 self.unauth_responses[api] = response
-    #                 resp_info = self.helpers.analyzeResponse(response)
-    #                 if resp_info.getStatusCode() < 400:
-    #                     temp_unauth.add(api)
-
-    #             # Update state for the Renderer
-    #             current_count += 1
-    #             self.unauth_apis = frozenset(temp_unauth)
-
-    #             # Batch update UI
-    #             if current_count % batch_size == 0:
-    #                 self.api_list.repaint()
-    #                 time.sleep(0.01) # Small sleep to yield to UI thread
-
-    #         except Exception as e:
-    #             self.callbacks.printError("[ERROR] " + api + " -> " + str(e))
-
-    #     # Final refresh on the UI thread (EDT)
-    #     class FinalRefresh(Runnable):
-    #         def __init__(self, ext): self.ext = ext
-    #         def run(self):
-    #             self.ext.refresh_display(None)
-    #             self.ext.callbacks.printOutput("[*] Scan finished. Found: " + str(len(self.ext.unauth_apis)))
-
-    #     SwingUtilities.invokeLater(FinalRefresh(self))
-
-    # def _run_unauth_checks(self):
-    #     import time
-    #     from javax.swing import SwingUtilities
-    #     from java.lang import Runnable
-
-    #     self.callbacks.printOutput("[*] Starting Unauth Scan...")
-        
-    #     raw_headers = self.auth_header_input.getText().strip()
-    #     scan_items = list(self.api_requests.items())
-    #     total_tasks = len(scan_items)
-        
-    #     if total_tasks == 0:
-    #         return
-
-    #     # 1. Initialize and show Progress Bar
-    #     def init_bar():
-    #         self.progress_bar.setMaximum(total_tasks)
-    #         self.progress_bar.setValue(0)
-    #         self.progress_bar.setVisible(True)
-    #     SwingUtilities.invokeLater(Runnable(init_bar))
-
-    #     if not raw_headers:
-    #         self.callbacks.printOutput("[-] No auth headers provided")
-    #         SwingUtilities.invokeLater(Runnable(lambda: self.progress_bar.setVisible(False)))
-    #         return
-
-    #     auth_headers = [h.strip().lower() for h in raw_headers.split(",")]
-    #     temp_unauth = set()
-    #     current_count = 0
-    #     batch_size = 5 # Faster UI feedback for the list
-
-    #     for api, data in scan_items:
-    #         try:
-    #             http_service = data["service"]
-    #             request = data["request"]
-    #             req_info = self.helpers.analyzeRequest(http_service, request)
-
-    #             headers = list(req_info.getHeaders())
-    #             body = request[req_info.getBodyOffset():]
-
-    #             # Remove auth headers
-    #             new_headers = [h for h in headers if h.split(":", 1)[0].lower() not in auth_headers]
-    #             new_request = self.helpers.buildHttpMessage(new_headers, body)
-    #             self.unauth_requests[api] = new_request
-
-    #             # Execute Request
-    #             rr = self.callbacks.makeHttpRequest(http_service, new_request)
-    #             response = rr.getResponse()
-
-    #             if response:
-    #                 self.unauth_responses[api] = response
-    #                 resp_info = self.helpers.analyzeResponse(response)
-    #                 if resp_info.getStatusCode() < 400:
-    #                     temp_unauth.add(api)
-
-    #             # 2. Increment and Update Progress Bar
-    #             current_count += 1
-                
-    #             # We use a simple lambda for the progress bar update to keep it smooth
-    #             val = current_count # Capture current value
-    #             SwingUtilities.invokeLater(Runnable(lambda: self.progress_bar.setValue(val)))
-
-    #             # 3. Batch update the list renderer
-    #             if current_count % batch_size == 0 or current_count == total_tasks:
-    #                 self.unauth_apis = frozenset(temp_unauth)
-    #                 self.api_list.repaint()
-    #                 time.sleep(0.01)
-
-    #         except Exception as e:
-    #             self.callbacks.printError("[ERROR] " + api + " -> " + str(e))
-
-    #     # 4. Final UI Cleanup
-    #     class FinalRefresh(Runnable):
-    #         def __init__(self, ext): self.ext = ext
-    #         def run(self):
-    #             self.ext.progress_bar.setVisible(False)
-    #             self.ext.refresh_display(None)
-    #             self.ext.callbacks.printOutput("[*] Scan finished. Found: " + str(len(self.ext.unauth_apis)))
-
-    #     SwingUtilities.invokeLater(FinalRefresh(self))
-
     def _run_unauth_checks(self):
-        import time
-        from javax.swing import SwingUtilities
-        from java.lang import Runnable
 
-        # Helper class to wrap Python functions for Java interfaces
-        class PythonRunnable(Runnable):
-            def __init__(self, func):
-                self.func = func
-            def run(self):
-                self.func()
-
-        self.callbacks.printOutput("[*] Starting Unauth Scan...")
+        if hasattr(self, 'is_scanning') and self.is_scanning:
+            return
         
+        self.is_scanning = True
+        self.stop_scan = False # Reset stop flag
+
+        class PythonRunnable(Runnable):
+            def __init__(self, func): self.func = func
+            def run(self): self.func()
+
         raw_headers = self.auth_header_input.getText().strip()
         scan_items = list(self.api_requests.items())
         total_tasks = len(scan_items)
         
         if total_tasks == 0:
+            self.is_scanning = False
             return
 
-        # 1. Initialize and show Progress Bar
-        def init_bar():
+        # 1. LOCK ALL UI BUTTONS
+        def lock_ui():
+            self.verify_button.setEnabled(False)
+            self.refresh_button.setEnabled(False)
+            self.clear_button.setEnabled(False)
+            self.export_button.setEnabled(False)
+            self.stop_button.setVisible(True) # Show Stop button
             self.progress_bar.setMaximum(total_tasks)
             self.progress_bar.setValue(0)
             self.progress_bar.setVisible(True)
-        
-        SwingUtilities.invokeLater(PythonRunnable(init_bar))
+        SwingUtilities.invokeLater(PythonRunnable(lock_ui))
 
         if not raw_headers:
             self.callbacks.printOutput("[-] No auth headers provided")
-            SwingUtilities.invokeLater(PythonRunnable(lambda: self.progress_bar.setVisible(False)))
+            def abort():
+                self.stop_button.setVisible(False)
+                self.verify_button.setEnabled(True)
+                self.refresh_button.setEnabled(True)
+                self.clear_button.setEnabled(True)
+                self.export_button.setEnabled(True)
+                self.progress_bar.setVisible(False)
+                self.is_scanning = False
+            SwingUtilities.invokeLater(PythonRunnable(abort))
             return
 
         auth_headers = [h.strip().lower() for h in raw_headers.split(",")]
         temp_unauth = set()
         current_count = 0
-        batch_size = 5
 
         for api, data in scan_items:
+            # 2. CHECK FOR STOP REQUEST
+            if self.stop_scan:
+                self.callbacks.printOutput("[!] Scan stopped by user.")
+                break
+
             try:
-                # ... [Your existing HTTP request logic] ...
                 http_service = data["service"]
                 request = data["request"]
                 req_info = self.helpers.analyzeRequest(http_service, request)
                 headers = list(req_info.getHeaders())
                 body = request[req_info.getBodyOffset():]
+                
                 new_headers = [h for h in headers if h.split(":", 1)[0].lower() not in auth_headers]
                 new_request = self.helpers.buildHttpMessage(new_headers, body)
                 self.unauth_requests[api] = new_request
@@ -791,19 +507,14 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
 
                 if response:
                     self.unauth_responses[api] = response
-                    resp_info = self.helpers.analyzeResponse(response)
-                    if resp_info.getStatusCode() < 400:
+                    if self.helpers.analyzeResponse(response).getStatusCode() < 400:
                         temp_unauth.add(api)
 
-                # 2. Increment and Update Progress Bar
                 current_count += 1
-                
-                # Update bar value
                 val = current_count 
                 SwingUtilities.invokeLater(PythonRunnable(lambda: self.progress_bar.setValue(val)))
 
-                # 3. Batch update the list renderer
-                if current_count % batch_size == 0 or current_count == total_tasks:
+                if current_count % 5 == 0:
                     self.unauth_apis = frozenset(temp_unauth)
                     self.api_list.repaint()
                     time.sleep(0.01)
@@ -811,14 +522,23 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
             except Exception as e:
                 self.callbacks.printError("[ERROR] " + api + " -> " + str(e))
 
-        # 4. Final UI Cleanup
+        # 3. UNLOCK ALL UI BUTTONS
         def final_ui():
+            self.stop_button.setVisible(False)
+            self.verify_button.setEnabled(True)
+            self.refresh_button.setEnabled(True)
+            self.clear_button.setEnabled(True)
+            self.export_button.setEnabled(True)
             self.progress_bar.setVisible(False)
+            self.is_scanning = False
             self.refresh_display(None)
-            self.callbacks.printOutput("[*] Scan finished. Found: " + str(len(self.unauth_apis)))
+            self.callbacks.printOutput("[*] Done.")
 
         SwingUtilities.invokeLater(PythonRunnable(final_ui))
 
+    def request_stop(self, event):
+        self.stop_scan = True
+        self.callbacks.printOutput("[!] Stop request received. Finishing current task...")
     # ---------------- Tab ---------------- #
     def getTabCaption(self):
         return "API Counter"
