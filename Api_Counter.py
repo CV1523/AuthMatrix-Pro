@@ -26,7 +26,7 @@ from javax.swing import DefaultListCellRenderer
 from java.awt import Color
 from burp import IMessageEditorController
 from javax.swing import JTabbedPane
-
+from javax.swing import DefaultComboBoxModel
 
 # -------- Mouse listener (Jython-safe) --------
 class GitHubClickListener(MouseAdapter):
@@ -60,6 +60,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
 
         # Filter state
         self.exclude_options = False
+        self.discovered_methods = set(["All"])
 
         callbacks.registerHttpListener(self)
 
@@ -80,13 +81,11 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         left_top.add(self.count_label)
 
         right_top = JPanel(FlowLayout(FlowLayout.RIGHT))
-        self.options_dropdown = JComboBox(
-            ["All Methods", "Exclude OPTIONS"]
-        )
-        self.options_dropdown.addActionListener(self._on_options_change)
+        self.method_filter_dropdown = JComboBox(["All"])
+        self.method_filter_dropdown.addActionListener(self._on_filter_change)
 
-        right_top.add(JLabel("OPTIONS:"))
-        right_top.add(self.options_dropdown)
+        right_top.add(JLabel("Filter Method:"))
+        right_top.add(self.method_filter_dropdown)
 
         top_panel.add(left_top, BorderLayout.WEST)
         top_panel.add(right_top, BorderLayout.EAST)
@@ -244,9 +243,9 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
             return
 
         # 6. OPTIONS filter
-        if self.exclude_options and method == "OPTIONS":
-            return
-
+        ### if self.exclude_options and method == "OPTIONS":
+            ### return
+        
         # 7. Ignore static noise (performance boost)
         ignore_ext = (
             ".js", ".css", ".png", ".jpg", ".jpeg", ".gif",
@@ -255,12 +254,17 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         if path.lower().endswith(ignore_ext):
             return
 
+        if method not in self.discovered_methods:
+            self.discovered_methods.add(method)
+            self._update_method_dropdown()
+
         # 8. Store the data
         self.all_apis.add(api_signature)
         self.api_requests[api_signature] = {
             "service": http_service,
             "request": request,
-            "response": messageInfo.getResponse()
+            "response": messageInfo.getResponse(),
+            "method": method # Store method separately for easier filtering
         }
 
     def on_api_selected(self, event):
@@ -300,16 +304,31 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
             else:
                 self.response_viewer.setMessage(None, False)
 
+    def _update_method_dropdown(self):
+        """Refreshes the dropdown list without losing the current selection."""
+        
+        current_selection = self.method_filter_dropdown.getSelectedItem()
+        
+        # Sort methods but keep "All" at the top
+        methods = sorted([m for m in self.discovered_methods if m != "All"])
+        model = DefaultComboBoxModel(["All"] + methods)
+        
+        self.method_filter_dropdown.setModel(model)
+        if current_selection in self.discovered_methods:
+            self.method_filter_dropdown.setSelectedItem(current_selection)
 
+    def _on_filter_change(self, event):
+        self.refresh_display(None)
 
     # ---------------- Filtering ---------------- #
     def _get_filtered_apis(self):
-        if not self.exclude_options:
+        selected_method = self.method_filter_dropdown.getSelectedItem()
+        if not selected_method or selected_method == "All":
             return self.all_apis
-        return {
-            api for api in self.all_apis
-            if not api.startswith("OPTIONS ")
-        }
+        
+        # Filter set based on the prefix of the API signature (e.g., "GET ")
+        prefix = selected_method + " "
+        return {api for api in self.all_apis if api.startswith(prefix)}
 
     # ---------------- Actions ---------------- #
     def refresh_display(self, event):
