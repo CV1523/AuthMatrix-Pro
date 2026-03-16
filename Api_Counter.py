@@ -168,8 +168,16 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         # ---------- Center (API TABLE & Viewers) ----------
         from javax.swing.table import DefaultTableModel
         from javax.swing import JTable
+        from java.lang import Integer, String # Required for numerical sorting
 
-        self.api_table_model = DefaultTableModel(["S.NO", "Types", "API", "Unauthen-SC", "Unauthor-SC"], 0)
+        # FIX: Custom Table Model to force numerical sorting on Column 0
+        class CustomTableModel(DefaultTableModel):
+            def getColumnClass(self, columnIndex):
+                if columnIndex == 0:
+                    return Integer # Force S.NO to sort as a Number
+                return String
+
+        self.api_table_model = CustomTableModel(["S.NO", "Types", "API", "Unauthen-SC", "Unauthor-SC"], 0)
         self.api_table = JTable(self.api_table_model)
         self.api_table.setAutoCreateRowSorter(True)
         self.api_table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
@@ -178,8 +186,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         self.api_table.getColumnModel().getColumn(1).setPreferredWidth(60)
         self.api_table.getColumnModel().getColumn(2).setPreferredWidth(350)
         self.api_table.getColumnModel().getColumn(3).setPreferredWidth(80)
-        self.api_table.getColumnModel().getColumn(3).setPreferredWidth(70)
-        self.api_table.getColumnModel().getColumn(4).setPreferredWidth(70)
+        self.api_table.getColumnModel().getColumn(4).setPreferredWidth(80)
         
         def tableSelectionChanged(event):
             if not event.getValueIsAdjusting(): self.on_api_selected(None)
@@ -190,23 +197,23 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
 
         api_scroll = JScrollPane(self.api_table)
 
-        # ---- REQUEST TABS (3 Tabs) ----
+        # ---- REQUEST TABS ----
         self.auth_request_viewer = self.callbacks.createMessageEditor(self, False)
         self.unauth_request_viewer = self.callbacks.createMessageEditor(self, False)
-        self.esc_request_viewer = self.callbacks.createMessageEditor(self, False) # NEW
+        self.esc_request_viewer = self.callbacks.createMessageEditor(self, False)
 
         self.request_tabs = JTabbedPane()
         self.request_tabs.addTab("Original Req", self.auth_request_viewer.getComponent())
         self.request_tabs.addTab("Unauth Req", self.unauth_request_viewer.getComponent())
-        self.request_tabs.addTab("Escalation Req", self.esc_request_viewer.getComponent()) # NEW
+        self.request_tabs.addTab("Escalation Req", self.esc_request_viewer.getComponent())
 
-        # ---- RESPONSE TABS (2 Tabs) ----
+        # ---- RESPONSE TABS ----
         self.response_viewer = self.callbacks.createMessageEditor(self, False)
-        self.esc_response_viewer = self.callbacks.createMessageEditor(self, False) # NEW
+        self.esc_response_viewer = self.callbacks.createMessageEditor(self, False)
 
         self.response_tabs = JTabbedPane()
         self.response_tabs.addTab("Unauth Resp", self.response_viewer.getComponent())
-        self.response_tabs.addTab("Escalation Resp", self.esc_response_viewer.getComponent()) # NEW
+        self.response_tabs.addTab("Escalation Resp", self.esc_response_viewer.getComponent())
 
         from javax.swing.event import ChangeListener
         class TabChangeListener(ChangeListener):
@@ -232,14 +239,9 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         bottom_panel = JPanel(BorderLayout())
         auth_panel = JPanel(FlowLayout(FlowLayout.LEFT))
         
-        # Unauth Config
         self.auth_header_input = JTextField(12)
-        self.auth_header_input.setToolTipText("Headers to remove for unauth check (e.g., Cookie, Authorization)")
-        self.include_unauth_cb = JCheckBox("Unauth Scan", True) # NEW
-
-        # Escalation Config
-        self.esc_header_input = JTextField(20) # NEW
-        self.esc_header_input.setToolTipText("Victim/Low-Priv Header (e.g., Cookie: session=lowpriv123)")
+        self.include_unauth_cb = JCheckBox("Unauth Scan", True)
+        self.esc_header_input = JTextField(20)
 
         self.verify_button = JButton("Start Access Control Scan", actionPerformed=self.verify_access_control)
 
@@ -253,7 +255,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         self.stop_button.setVisible(False)
         self.stop_button.setForeground(Color(200, 0, 0))
 
-        # Assembly
         auth_panel.add(JLabel("Auth Headers:"))
         auth_panel.add(self.auth_header_input)
         auth_panel.add(self.include_unauth_cb)
