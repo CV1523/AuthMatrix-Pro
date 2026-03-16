@@ -9,7 +9,7 @@ from java.util import Arrays
 
 from javax.swing import (
     JPanel, JTextArea, JScrollPane, JButton,
-    JLabel, JComboBox, JFileChooser
+    JLabel, JComboBox, JFileChooser, JOptionPane
 )
 from java.awt import (
     BorderLayout, FlowLayout, Font,
@@ -354,131 +354,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
             
             SwingUtilities.invokeLater(UpdateText(self.auth_header_input, new_suggestions, existing_filters))
 
-    # def on_api_selected(self, event):
-    #     if event.getValueIsAdjusting():
-    #         return
-
-    #     selected = self.api_list.getSelectedValue()
-    #     if not selected:
-    #         return
-
-    #     data = self.api_requests.get(selected)
-    #     if not data:
-    #         return
-
-    #     self.current_message = data
-
-    #     self.auth_request_viewer.setMessage(
-    #         data["request"], True
-    #     )
-
-    #     unauth_req = self.unauth_requests.get(selected)
-    #     if unauth_req:
-    #         self.unauth_request_viewer.setMessage(unauth_req, True)
-    #     else:
-    #         self.unauth_request_viewer.setMessage(None, False)
-
-    #     if self.request_tabs.getSelectedIndex() == 1:
-    #         unauth_resp = self.unauth_responses.get(selected)
-    #         if unauth_resp:
-    #             self.response_viewer.setMessage(unauth_resp, False)
-    #         else:
-    #             self.response_viewer.setMessage(None, False)
-    #     else:
-    #         # Show original authenticated response
-    #         if data["response"]:
-    #             self.response_viewer.setMessage(data["response"], False)
-    #         else:
-    #             self.response_viewer.setMessage(None, False)
-
-    # def on_api_selected(self, event):
-    #     # 1. Get the selected row index from the table
-    #     row = self.api_table.getSelectedRow()
-        
-    #     # If no row is selected, clear viewers and exit
-    #     if row == -1:
-    #         self.auth_request_viewer.setMessage(None, False)
-    #         self.unauth_request_viewer.setMessage(None, False)
-    #         self.response_viewer.setMessage(None, False)
-    #         return
-
-    #     # 2. Reconstruct the API signature from Table Columns
-    #     # Col 1 is 'Types' (Method), Col 2 is 'API' (Path)
-    #     try:
-    #         method = self.api_table.getValueAt(row, 1)
-    #         path = self.api_table.getValueAt(row, 2)
-    #         selected_sig = "{} {}".format(method, path)
-            
-    #         data = self.api_requests.get(selected_sig)
-    #     except Exception as e:
-    #         self.callbacks.printError("Selection Error: " + str(e))
-    #         return
-
-    #     if not data:
-    #         return
-
-    #     self.current_message = data
-
-    #     # 3. Handle Request/Response Logic based on Tab Selection
-    #     # Index 0 = 'Request', Index 1 = 'Unauth Request'
-    #     current_tab = self.request_tabs.getSelectedIndex()
-
-    #     if current_tab == 1:
-    #         # Show Unauth Data
-    #         unauth_req = self.unauth_requests.get(selected_sig)
-    #         self.unauth_request_viewer.setMessage(unauth_req if unauth_req else b"", True)
-            
-    #         unauth_resp = self.unauth_responses.get(selected_sig)
-    #         self.response_viewer.setMessage(unauth_resp if unauth_resp else b"", False)
-    #     else:
-    #         # Show Original Authenticated Data
-    #         self.auth_request_viewer.setMessage(data["request"], True)
-    #         self.response_viewer.setMessage(data["response"] if data["response"] else b"", False)
-
-    # def on_api_selected(self, event):
-    #     # 1. Get the visual row index
-    #     view_row = self.api_table.getSelectedRow()
-        
-    #     if view_row == -1:
-    #         self.auth_request_viewer.setMessage(None, False)
-    #         self.unauth_request_viewer.setMessage(None, False)
-    #         self.response_viewer.setMessage(None, False)
-    #         return
-
-    #     # 2. Convert View Index to Model Index (CRITICAL for Sorting)
-    #     try:
-    #         model_row = self.api_table.convertRowIndexToModel(view_row)
-            
-    #         # Use the model to get the values to ensure accuracy
-    #         method = self.api_table.getModel().getValueAt(model_row, 1)
-    #         path = self.api_table.getModel().getValueAt(model_row, 2)
-    #         selected_sig = "{} {}".format(method, path)
-            
-    #         data = self.api_requests.get(selected_sig)
-    #     except Exception as e:
-    #         self.callbacks.printError("Selection Mapping Error: " + str(e))
-    #         return
-
-    #     if not data:
-    #         return
-
-    #     self.current_message = data
-
-    #     # 3. Handle Request/Response Logic
-    #     current_tab = self.request_tabs.getSelectedIndex()
-
-    #     if current_tab == 1:
-    #         # Show Unauth Data
-    #         unauth_req = self.unauth_requests.get(selected_sig)
-    #         self.unauth_request_viewer.setMessage(unauth_req if unauth_req else b"", True)
-            
-    #         unauth_resp = self.unauth_responses.get(selected_sig)
-    #         self.response_viewer.setMessage(unauth_resp if unauth_resp else b"", False)
-    #     else:
-    #         # Show Original Authenticated Data
-    #         self.auth_request_viewer.setMessage(data["request"], True)
-    #         self.response_viewer.setMessage(data["response"] if data["response"] else b"", False)
-
     def on_api_selected(self, event):
         # 1. Get the visual row index
         view_row = self.api_table.getSelectedRow()
@@ -612,24 +487,52 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         self.refresh_display(None)
 
     def export_csv(self, event):
-        apis = sorted(self._get_filtered_apis())
-        if not apis:
+        row_count = self.api_table.getRowCount()
+        
+        if row_count == 0:
+            from javax.swing import JOptionPane
+            JOptionPane.showMessageDialog(self.panel, "No data visible to export.")
             return
 
+        from javax.swing import JFileChooser
+        from java.io import FileOutputStream, OutputStreamWriter
+        import java.nio.charset.StandardCharsets as StandardCharsets
+        
         chooser = JFileChooser()
         chooser.setDialogTitle("Save API List as CSV")
 
         if chooser.showSaveDialog(self.panel) == JFileChooser.APPROVE_OPTION:
-            path = chooser.getSelectedFile().getAbsolutePath()
-            if not path.endswith(".csv"):
-                path += ".csv"
+            file_path = chooser.getSelectedFile().getAbsolutePath()
+            if not file_path.lower().endswith(".csv"):
+                file_path += ".csv"
 
-            writer = FileWriter(path)
-            writer.write("Method,Path\n")
-            for api in apis:
-                method, endpoint = api.split(" ", 1)
-                writer.write("{},{}\n".format(method, endpoint))
-            writer.close()
+            try:
+                # Use FileOutputStream + OutputStreamWriter to force UTF-8 at the Java level
+                fos = FileOutputStream(file_path)
+                writer = OutputStreamWriter(fos, StandardCharsets.UTF_8)
+                
+                # Write Header
+                writer.write(u"S.NO,Method,Path,Status Code\n")
+                
+                for i in range(row_count):
+                    sno = self.api_table.getValueAt(i, 0)
+                    method = self.api_table.getValueAt(i, 1)
+                    path = self.api_table.getValueAt(i, 2)
+                    status = self.api_table.getValueAt(i, 3)
+                    
+                    # Sanitize commas and ensure the path is treated as Unicode
+                    safe_path = unicode(path).replace(u",", u"%2C")
+                    
+                    # Format the line as a Unicode string
+                    line = u"{},{},{},{}\n".format(sno, method, safe_path, status)
+                    
+                    writer.write(line)
+                
+                writer.close()
+                self.callbacks.printOutput("[*] Successfully exported {} APIs (UTF-8) to {}".format(row_count, file_path))
+                
+            except Exception as e:
+                self.callbacks.printError("[!] CSV Export failed: " + str(e))
 
     def verify_unauthenticated(self, event):
         Thread(UnauthWorker(self)).start()
