@@ -9,7 +9,7 @@ from java.util import Arrays
 
 from javax.swing import (
     JPanel, JTextArea, JScrollPane, JButton,
-    JLabel, JComboBox, JFileChooser, JOptionPane
+    JLabel, JComboBox, JFileChooser, JOptionPane, JCheckBox
 )
 from java.awt import (
     BorderLayout, FlowLayout, Font,
@@ -59,6 +59,10 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         self.unauth_responses = {}
         self.unauth_status_codes = {}
         self.is_scanning = False
+        self.esc_requests = {}
+        self.esc_responses = {}
+        self.esc_status_codes = {}
+        self.esc_apis = set()
 
         callbacks.setExtensionName("Unique API Counter")
 
@@ -146,7 +150,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         right_top.add(self.search_field)
         right_top.add(JLabel("  |  "))
 
-        # Action Buttons
         self.refresh_button = JButton("Refresh Count", actionPerformed=self.refresh_display)
         self.clear_button = JButton("Clear APIs", actionPerformed=self.clear_apis)
         self.export_button = JButton("Export CSV", actionPerformed=self.export_csv)
@@ -154,7 +157,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         right_top.add(self.clear_button)
         right_top.add(self.export_button)
 
-        # Method Filter
         right_top.add(JLabel(" |  Filter Method:"))
         self.method_filter_dropdown = JComboBox(["All"])
         self.method_filter_dropdown.addActionListener(self._on_filter_change)
@@ -167,77 +169,96 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         from javax.swing.table import DefaultTableModel
         from javax.swing import JTable
 
-        # Initialize Table Model
-        self.api_table_model = DefaultTableModel(["S.NO", "Types", "API", "Status Code"], 0)
+        self.api_table_model = DefaultTableModel(["S.NO", "Types", "API", "Unauthen-SC", "Unauthor-SC"], 0)
         self.api_table = JTable(self.api_table_model)
         self.api_table.setAutoCreateRowSorter(True)
         self.api_table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
         
-        # Set column widths
-        self.api_table.getColumnModel().getColumn(0).setPreferredWidth(50)
-        self.api_table.getColumnModel().getColumn(1).setPreferredWidth(70)
-        self.api_table.getColumnModel().getColumn(2).setPreferredWidth(400)
-        self.api_table.getColumnModel().getColumn(3).setPreferredWidth(100)
+        self.api_table.getColumnModel().getColumn(0).setPreferredWidth(40)
+        self.api_table.getColumnModel().getColumn(1).setPreferredWidth(60)
+        self.api_table.getColumnModel().getColumn(2).setPreferredWidth(350)
+        self.api_table.getColumnModel().getColumn(3).setPreferredWidth(80)
+        self.api_table.getColumnModel().getColumn(3).setPreferredWidth(70)
+        self.api_table.getColumnModel().getColumn(4).setPreferredWidth(70)
         
-        # Table selection listener
         def tableSelectionChanged(event):
-            if not event.getValueIsAdjusting():
-                self.on_api_selected(None)
+            if not event.getValueIsAdjusting(): self.on_api_selected(None)
         self.api_table.getSelectionModel().addListSelectionListener(tableSelectionChanged)
         
-        # Custom Renderer for Red Highlighting
+        from java.lang import Object
         self.api_table.setDefaultRenderer(Object, ApiTableRenderer(self))
 
         api_scroll = JScrollPane(self.api_table)
 
-        # Viewers
+        # ---- REQUEST TABS (3 Tabs) ----
         self.auth_request_viewer = self.callbacks.createMessageEditor(self, False)
         self.unauth_request_viewer = self.callbacks.createMessageEditor(self, False)
+        self.esc_request_viewer = self.callbacks.createMessageEditor(self, False) # NEW
 
         self.request_tabs = JTabbedPane()
-        self.request_tabs.addTab("Request", self.auth_request_viewer.getComponent())
-        self.request_tabs.addTab("Unauth Request", self.unauth_request_viewer.getComponent())
+        self.request_tabs.addTab("Original Req", self.auth_request_viewer.getComponent())
+        self.request_tabs.addTab("Unauth Req", self.unauth_request_viewer.getComponent())
+        self.request_tabs.addTab("Escalation Req", self.esc_request_viewer.getComponent()) # NEW
+
+        # ---- RESPONSE TABS (2 Tabs) ----
+        self.response_viewer = self.callbacks.createMessageEditor(self, False)
+        self.esc_response_viewer = self.callbacks.createMessageEditor(self, False) # NEW
+
+        self.response_tabs = JTabbedPane()
+        self.response_tabs.addTab("Unauth Resp", self.response_viewer.getComponent())
+        self.response_tabs.addTab("Escalation Resp", self.esc_response_viewer.getComponent()) # NEW
 
         from javax.swing.event import ChangeListener
         class TabChangeListener(ChangeListener):
             def __init__(self, extender): self.extender = extender
             def stateChanged(self, event): self.extender.on_api_selected(None)
+        
         self.request_tabs.addChangeListener(TabChangeListener(self))
-
-        self.response_viewer = self.callbacks.createMessageEditor(self, False)
+        self.response_tabs.addChangeListener(TabChangeListener(self))
 
         request_panel = JPanel(BorderLayout())
         request_panel.add(self.request_tabs, BorderLayout.CENTER)
 
         response_panel = JPanel(BorderLayout())
-        response_panel.add(JLabel("Response"), BorderLayout.NORTH)
-        response_panel.add(self.response_viewer.getComponent(), BorderLayout.CENTER)
+        response_panel.add(self.response_tabs, BorderLayout.CENTER)
 
         right_split = JSplitPane(JSplitPane.VERTICAL_SPLIT, request_panel, response_panel)
         right_split.setResizeWeight(0.5)
 
         main_split = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, api_scroll, right_split)
-        main_split.setResizeWeight(0.4)
+        main_split.setResizeWeight(0.35)
 
-        # ---------- Bottom bar ----------
+        # ---------- Bottom bar (The Engine) ----------
         bottom_panel = JPanel(BorderLayout())
         auth_panel = JPanel(FlowLayout(FlowLayout.LEFT))
         
-        self.auth_header_input = JTextField(25)
-        self.verify_button = JButton("Verify Unauthenticated APIs", actionPerformed=self.verify_unauthenticated)
+        # Unauth Config
+        self.auth_header_input = JTextField(12)
+        self.auth_header_input.setToolTipText("Headers to remove for unauth check (e.g., Cookie, Authorization)")
+        self.include_unauth_cb = JCheckBox("Unauth Scan", True) # NEW
+
+        # Escalation Config
+        self.esc_header_input = JTextField(20) # NEW
+        self.esc_header_input.setToolTipText("Victim/Low-Priv Header (e.g., Cookie: session=lowpriv123)")
+
+        self.verify_button = JButton("Start Access Control Scan", actionPerformed=self.verify_access_control)
 
         from java.awt import Dimension
         self.progress_bar = JProgressBar(0, 100)
         self.progress_bar.setStringPainted(True)
         self.progress_bar.setVisible(False)
-        self.progress_bar.setPreferredSize(Dimension(150, 15))
+        self.progress_bar.setPreferredSize(Dimension(120, 15))
 
         self.stop_button = JButton("Stop Scan", actionPerformed=self.request_stop)
         self.stop_button.setVisible(False)
         self.stop_button.setForeground(Color(200, 0, 0))
 
+        # Assembly
         auth_panel.add(JLabel("Auth Headers:"))
         auth_panel.add(self.auth_header_input)
+        auth_panel.add(self.include_unauth_cb)
+        auth_panel.add(JLabel("  |  Escalation Header:"))
+        auth_panel.add(self.esc_header_input)
         auth_panel.add(self.verify_button)
         auth_panel.add(self.stop_button)
         auth_panel.add(self.progress_bar)
@@ -355,16 +376,17 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
             SwingUtilities.invokeLater(UpdateText(self.auth_header_input, new_suggestions, existing_filters))
 
     def on_api_selected(self, event):
-        # 1. Get the visual row index
         view_row = self.api_table.getSelectedRow()
-        
         if view_row == -1:
+            # Clear all viewers if nothing is selected
             self.auth_request_viewer.setMessage(None, False)
             self.unauth_request_viewer.setMessage(None, False)
+            self.esc_request_viewer.setMessage(None, False)
             self.response_viewer.setMessage(None, False)
+            self.esc_response_viewer.setMessage(None, False)
             return
 
-        # 2. Convert View Index to Model Index (Essential for Sorting/Searching)
+        # 1. Map View to Model for accurate data retrieval
         try:
             model_row = self.api_table.convertRowIndexToModel(view_row)
             method = self.api_table.getModel().getValueAt(model_row, 1)
@@ -375,27 +397,34 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         except:
             return
 
-        if not data:
-            return
-
+        if not data: return
         self.current_message = data
 
-        # 3. Determine which data to show based on the active tab
-        # Index 0 = "Request" | Index 1 = "Unauth Request"
-        current_tab = self.request_tabs.getSelectedIndex()
-
-        if current_tab == 1:
-            # Show the Unauth Request and its specific Response
-            unauth_req = self.unauth_requests.get(selected_sig)
-            self.unauth_request_viewer.setMessage(unauth_req if unauth_req else b"", True)
-            
-            # This pulls the response captured during the 'Verify' scan
-            unauth_resp = self.unauth_responses.get(selected_sig)
-            self.response_viewer.setMessage(unauth_resp if unauth_resp else b"", False)
-        else:
-            # Show the Original Auth Request and the Original Response
+        # 2. Update REQUEST Viewers (3 Tabs)
+        # Tab 0: Original | Tab 1: Unauth | Tab 2: Escalation
+        req_tab = self.request_tabs.getSelectedIndex()
+        
+        if req_tab == 0:
             self.auth_request_viewer.setMessage(data["request"], True)
-            self.response_viewer.setMessage(data["response"] if data["response"] else b"", False)
+        elif req_tab == 1:
+            u_req = self.unauth_requests.get(selected_sig)
+            self.unauth_request_viewer.setMessage(u_req if u_req else b"", True)
+        elif req_tab == 2:
+            e_req = self.esc_requests.get(selected_sig)
+            self.esc_request_viewer.setMessage(e_req if e_req else b"", True)
+
+        # 3. Update RESPONSE Viewers (2 Tabs)
+        # Tab 0: Unauth Response | Tab 1: Escalation Response
+        res_tab = self.response_tabs.getSelectedIndex()
+        
+        if res_tab == 0:
+            # Show Unauth Response captured during scan
+            u_resp = self.unauth_responses.get(selected_sig)
+            self.response_viewer.setMessage(u_resp if u_resp else b"", False)
+        elif res_tab == 1:
+            # Show Escalation Response captured during scan
+            e_resp = self.esc_responses.get(selected_sig)
+            self.esc_response_viewer.setMessage(e_resp if e_resp else b"", False)
 
     def _update_method_dropdown(self):
         """Refreshes the dropdown list without losing the current selection."""
@@ -414,14 +443,6 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         self.refresh_display(None)
 
     # ---------------- Filtering ---------------- #
-    # def _get_filtered_apis(self):
-    #     selected_method = self.method_filter_dropdown.getSelectedItem()
-    #     if not selected_method or selected_method == "All":
-    #         return self.all_apis
-        
-    #     # Filter set based on the prefix of the API signature (e.g., "GET ")
-    #     prefix = selected_method + " "
-    #     return {api for api in self.all_apis if api.startswith(prefix)}
     def _get_filtered_apis(self):
         """Combines Method Filter and Search Keyword."""
         selected_method = self.method_filter_dropdown.getSelectedItem()
@@ -439,6 +460,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
             filtered = {api for api in filtered if search_query in api.lower()}
             
         return filtered
+    
     # ---------------- Actions ---------------- #
     def refresh_display(self, event):
         self.api_table_model.setRowCount(0) # Clear table
@@ -447,13 +469,15 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         for i, api_sig in enumerate(filtered_apis):
             method, path = api_sig.split(" ", 1)
             # Retrieve status code if it exists from the unauth check
-            status = self.unauth_status_codes.get(api_sig, "-")
+            u_code = self.unauth_status_codes.get(api_sig, "-")
+            e_code = self.esc_status_codes.get(api_sig, "-")
             
             self.api_table_model.addRow([
-                i + 1,          # S.NO
-                method,         # Types
-                path,           # API
-                status          # Status Code
+                i + 1, 
+                method, 
+                path, 
+                str(u_code), 
+                str(e_code)
             ])
         
         self.count_label.setText("Total Unique APIs: {}".format(len(filtered_apis)))
@@ -512,20 +536,17 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
                 writer = OutputStreamWriter(fos, StandardCharsets.UTF_8)
                 
                 # Write Header
-                writer.write(u"S.NO,Method,Path,Status Code\n")
+                writer.write(u"S.NO,Method,Path,Unauth Status,Escalation Status\n")
                 
                 for i in range(row_count):
                     sno = self.api_table.getValueAt(i, 0)
                     method = self.api_table.getValueAt(i, 1)
                     path = self.api_table.getValueAt(i, 2)
-                    status = self.api_table.getValueAt(i, 3)
-                    
-                    # Sanitize commas and ensure the path is treated as Unicode
-                    safe_path = unicode(path).replace(u",", u"%2C")
-                    
+                    u_status = self.api_table.getValueAt(i, 3)
+                    e_status = self.api_table.getValueAt(i, 4)
+                                        
                     # Format the line as a Unicode string
-                    line = u"{},{},{},{}\n".format(sno, method, safe_path, status)
-                    
+                    line = u"{},{},{},{},{}\n".format(sno, method, unicode(path).replace(u",", u"%2C"), u_status, e_status)
                     writer.write(line)
                 
                 writer.close()
@@ -643,6 +664,125 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
 
         SwingUtilities.invokeLater(PythonRunnable(final_ui))
 
+    def _run_access_scan(self):
+        import time
+        from javax.swing import SwingUtilities
+        
+        # 1. Thread Safety Lock
+        if hasattr(self, 'is_scanning') and self.is_scanning: return
+        self.is_scanning = True
+        self.stop_scan = False
+
+        # Reset findings for the new scan
+        self.unauth_apis = set()
+        self.esc_apis = set()
+        self.unauth_status_codes = {}
+        self.esc_status_codes = {}
+        
+        scan_items = list(self.api_requests.items())
+        total_tasks = len(scan_items)
+        if total_tasks == 0:
+            self.is_scanning = False
+            return
+
+        # --- UI LOCKDOWN: Disable buttons during scan ---
+        def start_ui():
+            self.verify_button.setEnabled(False)
+            self.refresh_button.setEnabled(False) # Disable Refresh
+            self.clear_button.setEnabled(False)   # Disable Clear
+            self.export_button.setEnabled(False)  # Disable Export
+            
+            self.stop_button.setVisible(True)
+            self.progress_bar.setMaximum(total_tasks)
+            self.progress_bar.setValue(0)
+            self.progress_bar.setVisible(True)
+        SwingUtilities.invokeLater(PythonRunnable(start_ui))
+
+        # Get inputs
+        unauth_headers = [h.strip().lower() for h in self.auth_header_input.getText().split(",") if h.strip()]
+        esc_header_full = self.esc_header_input.getText().strip()
+        run_unauth = self.include_unauth_cb.isSelected()
+
+        for current_count, (api, data) in enumerate(scan_items, 1):
+            if self.stop_scan: break
+            
+            try:
+                http_service = data["service"]
+                orig_request = data["request"]
+                req_info = self.helpers.analyzeRequest(http_service, orig_request)
+                headers = list(req_info.getHeaders())
+                body = orig_request[req_info.getBodyOffset():]
+
+                # --- PHASE 1: UNAUTHENTICATED ---
+                if run_unauth:
+                    unauth_headers_list = [h for h in headers if h.split(":", 1)[0].lower() not in unauth_headers]
+                    unauth_req = self.helpers.buildHttpMessage(unauth_headers_list, body)
+                    self.unauth_requests[api] = unauth_req
+                    
+                    unauth_rr = self.callbacks.makeHttpRequest(http_service, unauth_req)
+                    u_resp = unauth_rr.getResponse()
+                    if u_resp:
+                        self.unauth_responses[api] = u_resp
+                        u_code = self.helpers.analyzeResponse(u_resp).getStatusCode()
+                        self.unauth_status_codes[api] = u_code 
+                        if u_code < 400:
+                            self.unauth_apis.add(api)
+
+                # --- PHASE 2: ESCALATION ---
+                if ":" in esc_header_full:
+                    target_header = esc_header_full.split(":", 1)[0].strip().lower()
+                    esc_headers = []
+                    replaced = False
+                    
+                    for h in headers:
+                        if h.lower().startswith(target_header + ":"):
+                            esc_headers.append(esc_header_full)
+                            replaced = True
+                        else:
+                            esc_headers.append(h)
+                    if not replaced: esc_headers.append(esc_header_full)
+
+                    esc_req = self.helpers.buildHttpMessage(esc_headers, body)
+                    self.esc_requests[api] = esc_req
+                    
+                    esc_rr = self.callbacks.makeHttpRequest(http_service, esc_req)
+                    e_resp = esc_rr.getResponse()
+                    if e_resp:
+                        self.esc_responses[api] = e_resp
+                        e_code = self.helpers.analyzeResponse(e_resp).getStatusCode()
+                        self.esc_status_codes[api] = e_code 
+                        if e_code == 200:
+                            self.esc_apis.add(api)
+
+                # Update Progress and live refresh
+                SwingUtilities.invokeLater(PythonRunnable(lambda: self.progress_bar.setValue(current_count)))
+                if current_count % 5 == 0 or current_count == total_tasks:
+                    SwingUtilities.invokeLater(PythonRunnable(lambda: self.refresh_display(None)))
+
+            except Exception as e:
+                self.callbacks.printError("Scan Error: " + str(e))
+
+        # --- UI UNLOCK: Restore button functionality ---
+        def end_ui():
+            self.progress_bar.setVisible(False)
+            self.stop_button.setVisible(False)
+            
+            self.verify_button.setEnabled(True)
+            self.refresh_button.setEnabled(True) # Re-enable Refresh
+            self.clear_button.setEnabled(True)   # Re-enable Clear
+            self.export_button.setEnabled(True)  # Re-enable Export
+            
+            self.is_scanning = False
+            self.refresh_display(None)
+        SwingUtilities.invokeLater(PythonRunnable(end_ui))
+
+    def verify_access_control(self, event):
+        """Triggered by the button click to start the multi-mode scan."""
+        from java.lang import Thread
+        # Start the scan in a background thread to keep the UI responsive
+        t = Thread(PythonRunnable(self._run_access_scan))
+        t.start()
+    
     def request_stop(self, event):
         self.stop_scan = True
         self.callbacks.printOutput("[!] Stop request received. Finishing current task...")
@@ -698,7 +838,7 @@ class ApiTableRenderer(DefaultTableCellRenderer):
             self, table, value, isSelected, hasFocus, row, column
         )
         
-        # Mapping view row to model row so the color stays with the correct API
+        # 1. Map View index to Model index for sorting/filtering consistency
         try:
             model_row = table.convertRowIndexToModel(row)
             method = table.getModel().getValueAt(model_row, 1)
@@ -707,15 +847,29 @@ class ApiTableRenderer(DefaultTableCellRenderer):
         except:
             api_sig = ""
 
-        # Background Logic
+        # 2. Handle Selection (Whole row highlight)
         if isSelected:
             c.setBackground(self.selected_row)
-        elif api_sig in self.extender.unauth_apis:
-            c.setBackground(self.unauth_row)
-        else:
-            # Apply Zebra Stripes based on the visual row index
-            c.setBackground(self.even_row if row % 2 == 0 else self.odd_row)
+            c.setForeground(Color.WHITE)
+            return c
 
+        # 3. Apply Zebra Stripes as the base background
+        c.setBackground(self.even_row if row % 2 == 0 else self.odd_row)
         c.setForeground(Color.WHITE)
+
+        # 4. Apply Column-Specific Highlighting
+        # Index 3: Unauth Status Column
+        if column == 3 and api_sig in self.extender.unauth_apis:
+            c.setBackground(Color(140, 60, 60))   # Dark Red
+        
+        # Index 4: Escalation Status Column
+        elif column == 4 and api_sig in self.extender.esc_apis:
+            c.setBackground(Color(200, 100, 0))  # Brighter Orange for contrast
+            # c.setForeground(Color.BLACK) # Optional: Black text for orange
+            
         self.setBorder(None)
         return c
+
+class PythonRunnable(Runnable):
+    def __init__(self, func): self.func = func
+    def run(self): self.func()
