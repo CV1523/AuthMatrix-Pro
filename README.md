@@ -6,7 +6,7 @@
 ![Category](https://img.shields.io/badge/Category-Cybersecurity%20/%20Pentesting-red)
 
 ## 📖 Description
-**AuthMatrix Pro** is a powerful Burp Suite extension designed for Security Engineers to streamline the discovery and testing of API endpoints. It automates the tedious process of verifying **Unauthenticated Access** and **Privilege Escalation** (Vertical & Horizontal) vulnerabilities across large API surfaces.
+**AuthMatrix Pro** is a powerful Burp Suite extension designed for Hoodies to streamline the discovery and testing of API endpoints. It automates the tedious process of verifying **Unauthenticated Access** and **Privilege Escalation** (Vertical & Horizontal) vulnerabilities across large API surfaces.
 
 ## ✨ Key Features
 * **Automatic API Discovery:** Passively maps unique API endpoints from Proxy and Repeater traffic.
