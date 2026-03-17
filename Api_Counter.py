@@ -822,7 +822,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
                         self.esc_responses[api] = e_resp
                         e_code = self.helpers.analyzeResponse(e_resp).getStatusCode()
                         self.esc_status_codes[api] = e_code 
-                        if e_code == 200:
+                        if e_code == 200 or e_code == 201:
                             self.esc_apis.add(api)
 
                 # Update Progress and live refresh
