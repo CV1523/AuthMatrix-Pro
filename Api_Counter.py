@@ -36,6 +36,10 @@ from javax.swing import JTable
 from javax.swing.table import DefaultTableModel, DefaultTableCellRenderer
 from java.lang import Object
 
+from javax.swing import SwingConstants
+from javax.swing.table import DefaultTableCellRenderer
+
+
 # -------- Mouse listener (Jython-safe) --------
 class GitHubClickListener(MouseAdapter):
     def mouseClicked(self, event):
@@ -63,6 +67,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         self.esc_responses = {}
         self.esc_status_codes = {}
         self.esc_apis = set()
+        self.enabled_apis = {}
 
         callbacks.setExtensionName("Unique API Counter")
 
@@ -150,6 +155,8 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         right_top.add(self.search_field)
         right_top.add(JLabel("  |  "))
 
+        self.toggle_all_btn = JButton("Toggle All", actionPerformed=self.toggle_all_apis)
+        right_top.add(self.toggle_all_btn)
         self.refresh_button = JButton("Refresh Count", actionPerformed=self.refresh_display)
         self.clear_button = JButton("Clear APIs", actionPerformed=self.clear_apis)
         self.export_button = JButton("Export CSV", actionPerformed=self.export_csv)
@@ -168,26 +175,57 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         # ---------- Center (API TABLE & Viewers) ----------
         from javax.swing.table import DefaultTableModel
         from javax.swing import JTable
-        from java.lang import Integer, String # Required for numerical sorting
+        from java.lang import Integer, String, Boolean # Required for numerical sorting
 
         # FIX: Custom Table Model to force numerical sorting on Column 0
         class CustomTableModel(DefaultTableModel):
             def getColumnClass(self, columnIndex):
-                if columnIndex == 0:
-                    return Integer # Force S.NO to sort as a Number
+                if columnIndex == 0: return Boolean # Column 0 is now the Checkbox
+                if columnIndex == 1: return Integer # S.NO moved to index 1
                 return String
+            
+            def isCellEditable(self, row, column):
+                return column == 0
 
-        self.api_table_model = CustomTableModel(["S.NO", "Types", "API", "Unauthen-SC", "Unauthor-SC"], 0)
+        self.api_table_model = CustomTableModel(["Scan", "S.NO", "Types", "API", "Unauthen-SC", "Unauthor-SC"], 0)
         self.api_table = JTable(self.api_table_model)
         self.api_table.setAutoCreateRowSorter(True)
         self.api_table.setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
         
-        self.api_table.getColumnModel().getColumn(0).setPreferredWidth(40)
-        self.api_table.getColumnModel().getColumn(1).setPreferredWidth(60)
-        self.api_table.getColumnModel().getColumn(2).setPreferredWidth(350)
-        self.api_table.getColumnModel().getColumn(3).setPreferredWidth(80)
-        self.api_table.getColumnModel().getColumn(4).setPreferredWidth(80)
+        # Listener to track when a user checks/unchecks an API
+        from javax.swing.event import TableModelListener
+        class CheckboxListener(TableModelListener):
+            def __init__(self, extender): self.ext = extender
+            def tableChanged(self, e):
+                if e.getColumn() == 0:
+                    row = e.getFirstRow()
+                    val = self.ext.api_table_model.getValueAt(row, 0)
+                    # Use the API signature to track state
+                    method = self.ext.api_table_model.getValueAt(row, 2)
+                    path = self.ext.api_table_model.getValueAt(row, 3)
+                    sig = "{} {}".format(method, path)
+                    self.ext.enabled_apis[sig] = val
+
+        self.api_table_model.addTableModelListener(CheckboxListener(self))
+
+        # Adjust column widths for the new layout
+        self.api_table.getColumnModel().getColumn(0).setPreferredWidth(45) # Scan Checkbox
+        self.api_table.getColumnModel().getColumn(1).setPreferredWidth(45) # S.NO
+        self.api_table.getColumnModel().getColumn(2).setPreferredWidth(60) # Method
+        self.api_table.getColumnModel().getColumn(3).setPreferredWidth(350)# API Path
+        self.api_table.getColumnModel().getColumn(4).setPreferredWidth(80) # Unauth
+        self.api_table.getColumnModel().getColumn(5).setPreferredWidth(80) # Escalation
         
+        # from javax.swing import SwingConstants
+        # center_renderer = DefaultTableCellRenderer()
+        # center_renderer.setHorizontalAlignment(SwingConstants.CENTER)
+        
+        # # Apply the centering renderer to specific columns
+        # self.api_table.getColumnModel().getColumn(1).setCellRenderer(center_renderer) # S.NO
+        # self.api_table.getColumnModel().getColumn(2).setCellRenderer(center_renderer) # Types
+        # self.api_table.getColumnModel().getColumn(4).setCellRenderer(center_renderer) # Unauthen-SC
+        # self.api_table.getColumnModel().getColumn(5).setCellRenderer(center_renderer) # Unauthor-SC
+
         def tableSelectionChanged(event):
             if not event.getValueIsAdjusting(): self.on_api_selected(None)
         self.api_table.getSelectionModel().addListSelectionListener(tableSelectionChanged)
@@ -278,7 +316,24 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         self.panel.add(main_split, BorderLayout.CENTER)
         self.panel.add(bottom_panel, BorderLayout.SOUTH)
 
-    # ---------------- HTTP Listener ---------------- #
+    def toggle_all_apis(self, event):
+        # 1. Determine the target state based on the first visible row (if any)
+        # If no rows are visible, we default to enabling (False)
+        target_state = False
+        if self.api_table_model.getRowCount() > 0:
+            current_first_row_state = self.api_table_model.getValueAt(0, 0)
+            target_state = not current_first_row_state
+
+        # 2. Update the internal tracker for EVERY discovered API
+        # This ensures APIs hidden by search/filters are also updated
+        for api_sig in self.api_requests.keys():
+            self.enabled_apis[api_sig] = target_state
+
+        # 3. Refresh the UI to reflect the changes in the table
+        self.refresh_display(None)
+        
+        status_text = "Disabled" if target_state else "Enabled"
+        self.callbacks.printOutput("[*] Toggled ALL {} APIs to: {}".format(len(self.api_requests), status_text))
 
     def processHttpMessage(self, toolFlag, messageIsRequest, messageInfo):
         if not messageIsRequest:
@@ -330,11 +385,13 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
 
         # 8. Store the data
         self.all_apis.add(api_signature)
+        
+        self.enabled_apis[api_signature] = False 
         self.api_requests[api_signature] = {
             "service": http_service,
             "request": request,
             "response": messageInfo.getResponse(),
-            "method": method # Store method separately for easier filtering
+            "method": method
         }
 
     def _detect_auth_headers(self, headers):
@@ -390,8 +447,8 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         # 1. Map View to Model for accurate data retrieval
         try:
             model_row = self.api_table.convertRowIndexToModel(view_row)
-            method = self.api_table.getModel().getValueAt(model_row, 1)
-            path = self.api_table.getModel().getValueAt(model_row, 2)
+            method = self.api_table.getModel().getValueAt(model_row, 2)
+            path = self.api_table.getModel().getValueAt(model_row, 3)
             selected_sig = "{} {}".format(method, path)
             
             data = self.api_requests.get(selected_sig)
@@ -473,8 +530,14 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
             u_code = self.unauth_status_codes.get(api_sig, "-")
             e_code = self.esc_status_codes.get(api_sig, "-")
             
+            # CHANGE: Default to False (unchecked) for new APIs
+            is_enabled = self.enabled_apis.get(api_sig, False)
+            if api_sig not in self.enabled_apis:
+                self.enabled_apis[api_sig] = False
+            
             self.api_table_model.addRow([
-                i + 1, 
+                is_enabled, 
+                i + 1,      
                 method, 
                 path, 
                 str(u_code), 
@@ -707,6 +770,12 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
         for current_count, (api, data) in enumerate(scan_items, 1):
             if self.stop_scan: break
             
+            # If the checkbox is CHECKED (True), it means 'Disabled'. 
+            # We skip (continue) if it equals True.
+            if self.enabled_apis.get(api, False) == True:
+                SwingUtilities.invokeLater(PythonRunnable(lambda: self.progress_bar.setValue(current_count)))
+                continue
+
             try:
                 http_service = data["service"]
                 orig_request = data["request"]
@@ -728,6 +797,7 @@ class BurpExtender(IBurpExtender, IHttpListener, ITab, IMessageEditorController)
                         self.unauth_status_codes[api] = u_code 
                         if u_code < 400:
                             self.unauth_apis.add(api)
+                            print("[DEBUG] Added to Unauth Highlights: " + api)
 
                 # --- PHASE 2: ESCALATION ---
                 if ":" in esc_header_full:
@@ -835,40 +905,43 @@ class ApiTableRenderer(DefaultTableCellRenderer):
         self.odd_row = Color(52, 52, 52)        # Light Zebra
 
     def getTableCellRendererComponent(self, table, value, isSelected, hasFocus, row, column):
+        # 1. Get the rendering component (usually 'self')
         c = DefaultTableCellRenderer.getTableCellRendererComponent(
             self, table, value, isSelected, hasFocus, row, column
         )
-        
-        # 1. Map View index to Model index for sorting/filtering consistency
+
+        if column in [1, 2, 4, 5]:
+            c.setHorizontalAlignment(SwingConstants.CENTER)
+        else:
+            c.setHorizontalAlignment(SwingConstants.LEFT)
+
+        # 2. Map View index to Model index to get the API signature
         try:
             model_row = table.convertRowIndexToModel(row)
-            method = table.getModel().getValueAt(model_row, 1)
-            path = table.getModel().getValueAt(model_row, 2)
+            method = table.getModel().getValueAt(model_row, 2)
+            path = table.getModel().getValueAt(model_row, 3)
             api_sig = "{} {}".format(method, path)
         except:
             api_sig = ""
 
-        # 2. Handle Selection (Whole row highlight)
+        # 4. HANDLE SELECTION (High Priority)
         if isSelected:
             c.setBackground(self.selected_row)
             c.setForeground(Color.WHITE)
-            return c
+        else:
+            # 5. DEFAULT ZEBRA STRIPES
+            base_bg = self.even_row if row % 2 == 0 else self.odd_row
+            c.setBackground(base_bg)
+            c.setForeground(Color.WHITE)
 
-        # 3. Apply Zebra Stripes as the base background
-        c.setBackground(self.even_row if row % 2 == 0 else self.odd_row)
-        c.setForeground(Color.WHITE)
+            # 6. APPLY STATUS HIGHLIGHTS (Highest Priority for non-selected rows)
+            # Column 4 is Unauthen-SC, Column 5 is Unauthor-SC
+            if column == 4 and api_sig in self.extender.unauth_apis:
+                c.setBackground(Color(140, 60, 60)) # Red
+            elif column == 5 and api_sig in self.extender.esc_apis:
+                c.setBackground(Color(200, 100, 0)) # Orange
 
-        # 4. Apply Column-Specific Highlighting
-        # Index 3: Unauth Status Column
-        if column == 3 and api_sig in self.extender.unauth_apis:
-            c.setBackground(Color(140, 60, 60))   # Dark Red
-        
-        # Index 4: Escalation Status Column
-        elif column == 4 and api_sig in self.extender.esc_apis:
-            c.setBackground(Color(200, 100, 0))  # Brighter Orange for contrast
-            # c.setForeground(Color.BLACK) # Optional: Black text for orange
-            
-        self.setBorder(None)
+        c.setBorder(None)
         return c
 
 class PythonRunnable(Runnable):
